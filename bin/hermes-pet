@@ -1,0 +1,619 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ──────────────────────────────────────────────
+# Hermes Pet — project-local control wrapper
+# ──────────────────────────────────────────────
+
+PROJECT_DIR="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+RUNTIME_DIR="${PROJECT_DIR}/runtime"
+LOGS_DIR="${PROJECT_DIR}/logs"
+BIN_DIR="${PROJECT_DIR}/bin"
+OVERLAY_EXE_REL="src/wpf/HermesPet/bin/Release/net8.0-windows/win-x64/HermesPet.exe"
+OVERLAY_PORT=5731
+BRIDGE_SCRIPT="${PROJECT_DIR}/src/bridge_watcher.py"
+EVENT_SENDER="${PROJECT_DIR}/src/test_events.py"
+PIDFILE_OVERLAY="${RUNTIME_DIR}/overlay.pid"
+PIDFILE_BRIDGE="${RUNTIME_DIR}/bridge.pid"
+LOGFILE_BRIDGE="${LOGS_DIR}/bridge.log"
+LOGFILE_OVERLAY="${LOGS_DIR}/overlay.log"
+
+# Hermes profile: use HERMES_PROFILE env var, default "phantom"
+HERMES_PROFILE="${HERMES_PROFILE:-phantom}"
+STATE_DB="${HOME}/.hermes/profiles/${HERMES_PROFILE}/state.db"
+
+mkdir -p "$RUNTIME_DIR" "$LOGS_DIR"
+
+# ── Helpers ───────────────────────────────────
+
+_windows_host() {
+    ip route show default | awk '{print $3}'
+}
+
+_overlay_url() {
+    local host
+    host="$(_windows_host)"
+    echo "http://${host}:${OVERLAY_PORT}/event/"
+}
+
+_ensure_not_root() {
+    if [ "$(id -u)" = "0" ]; then
+        echo "Error: do not run hermes-pet as root." >&2
+        exit 1
+    fi
+}
+
+# ── PID helpers ───────────────────────────────
+
+_read_pid() {
+    local pidfile="$1"
+    if [ -f "$pidfile" ]; then
+        cat "$pidfile"
+    else
+        echo ""
+    fi
+}
+
+_pid_alive() {
+    local pid="$1"
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+_pidfile_dead() {
+    local pidfile="$1"
+    local pid
+    pid="$(_read_pid "$pidfile")"
+    if [ -n "$pid" ]; then
+        if ! _pid_alive "$pid"; then
+            rm -f "$pidfile"
+            return 0
+        fi
+        return 1
+    fi
+    return 0  # no pidfile = dead
+}
+
+# ── Overlay helpers (Windows) ─────────────────
+
+_overlay_pid_from_windows() {
+    powershell.exe -NoProfile -Command \
+        'Get-Process -Name HermesPet -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id' 2>/dev/null | tr -d '\r' || true
+}
+
+_overlay_handle() {
+    powershell.exe -NoProfile -Command \
+        'Get-Process -Name HermesPet -ErrorAction SilentlyContinue | Select-Object -ExpandProperty MainWindowHandle' 2>/dev/null | tr -d '\r' || true
+}
+
+_overlay_running() {
+    local pid
+    pid="$(_overlay_pid_from_windows)"
+    [ -n "$pid" ] && [ "$pid" != "0" ]
+}
+
+_overlay_responding() {
+    powershell.exe -NoProfile -Command \
+        'Get-Process -Name HermesPet -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Responding' 2>/dev/null | tr -d '\r' || true
+}
+
+# ── Commands ──────────────────────────────────
+
+cmd_status() {
+    local bridge_pid overlay_pid
+
+    echo "=== Hermes Pet Status ==="
+    echo "Project: $PROJECT_DIR"
+    echo ""
+
+    # Overlay
+    overlay_pid="$(_overlay_pid_from_windows)"
+    if [ -n "$overlay_pid" ]; then
+        local handle title responding
+        handle="$(_overlay_handle)"
+        responding="$(_overlay_responding)"
+        title=$(powershell.exe -NoProfile -Command \
+            'Get-Process -Name HermesPet -ErrorAction SilentlyContinue | Select-Object -ExpandProperty MainWindowTitle' 2>/dev/null)
+        if [ "$handle" != "0" ] && [ -n "$handle" ]; then
+            echo "Overlay:   RUNNING  (PID $overlay_pid, handle=$handle, responding=$responding)"
+            echo "  Title:   $title"
+        else
+            echo "Overlay:   RUNNING  (PID $overlay_pid, handle=$handle, responding=$responding)"
+            echo "  Title:   (handle=0 — window may be invisible)"
+        fi
+    else
+        echo "Overlay:   STOPPED"
+    fi
+
+    # Overlay reachable test
+    if _overlay_running; then
+        local host url
+        host="$(_windows_host)"
+        url="$(_overlay_url)"
+        if curl -s --max-time 2 -X POST -H "Content-Type: application/json" \
+            -d '{"event_type":"heartbeat","state":"idle"}' "$url" >/dev/null 2>&1; then
+            echo "  Events:  REACHABLE ($url)"
+        else
+            echo "  Events:  NOT REACHABLE (port $OVERLAY_PORT on $host)"
+        fi
+    fi
+    echo ""
+
+    # Bridge
+    bridge_pid="$(_read_pid "$PIDFILE_BRIDGE")"
+    if _pid_alive "$bridge_pid"; then
+        local state last_id
+        # Bridge writes state to src/bridge_watcher_state.json (hardcoded in bridge_watcher.py)
+        state_file="${PROJECT_DIR}/src/bridge_watcher_state.json"
+        if [ -f "$state_file" ]; then
+            state=$(python3 -c "import json; d=json.load(open('$state_file')); print(d.get('current_state','?'))" 2>/dev/null || echo "?")
+            last_id=$(python3 -c "import json; d=json.load(open('$state_file')); print(d.get('last_seen_id','?'))" 2>/dev/null || echo "?")
+        else
+            state="(waiting for first poll)"
+            last_id="?"
+        fi
+        echo "Bridge:    RUNNING  (PID $bridge_pid)"
+        echo "  State:   $state"
+        echo "  Cursor:  last_seen_id=$last_id"
+    else
+        if [ -f "$PIDFILE_BRIDGE" ]; then
+            echo "Bridge:    STOPPED  (stale pidfile removed)"
+            rm -f "$PIDFILE_BRIDGE"
+        else
+            echo "Bridge:    STOPPED"
+        fi
+    fi
+    echo ""
+
+    # Test-suite health
+    echo "Tests:     $(cd "$PROJECT_DIR" && python3 -m pytest tests/ -q 2>&1 | tail -1)"
+}
+
+cmd_start_overlay() {
+    if _overlay_running; then
+        echo "Overlay is already running (PID $(_overlay_pid_from_windows))."
+        echo "Use 'hermes-pet stop-overlay' first, or 'hermes-pet restart'."
+        exit 1
+    fi
+
+    echo "Starting Windows overlay..."
+    local overlay_exe_win
+    overlay_exe_win=$(wslpath -w "${PROJECT_DIR}/${OVERLAY_EXE_REL}" 2>/dev/null || echo "${PROJECT_DIR}/${OVERLAY_EXE_REL}")
+    powershell.exe -NoProfile -Command \
+        "Start-Process -FilePath '${overlay_exe_win}' -ArgumentList '--port ${OVERLAY_PORT}' -WindowStyle Normal" 2>&1
+
+    # Wait and verify
+    for i in $(seq 1 10); do
+        sleep 1
+        if _overlay_running; then
+            local pid handle
+            pid="$(_overlay_pid_from_windows)"
+            handle="$(_overlay_handle)"
+            echo "Overlay started: PID $pid, handle=$handle"
+            if [ "$handle" != "0" ]; then
+                echo "Window visible."
+            else
+                echo "Warning: MainWindowHandle is 0 — window may be invisible."
+            fi
+            return 0
+        fi
+    done
+
+    echo "Error: Overlay did not start within 10 seconds." >&2
+    exit 1
+}
+
+cmd_stop_overlay() {
+    local pid
+    pid="$(_overlay_pid_from_windows)"
+    if [ -z "$pid" ]; then
+        echo "Overlay is not running."
+        return 0
+    fi
+
+    echo "Stopping HermesPet.exe (PID $pid)..."
+    powershell.exe -NoProfile -Command "Stop-Process -Id $pid -Force; Write-Output 'done'" 2>&1 | grep -v '^$' || true
+    sleep 1
+
+    if _overlay_running; then
+        echo "Warning: Overlay did not stop gracefully. Forcing..." >&2
+        powershell.exe -NoProfile -Command "Get-Process -Name HermesPet -ErrorAction SilentlyContinue | Stop-Process -Force" 2>&1 || true
+        sleep 1
+    fi
+
+    if _overlay_running; then
+        echo "Error: Could not stop overlay." >&2
+        exit 1
+    fi
+    echo "Overlay stopped."
+}
+
+cmd_start_bridge() {
+    if [ -f "$PIDFILE_BRIDGE" ]; then
+        local old_pid
+        old_pid="$(_read_pid "$PIDFILE_BRIDGE")"
+        if _pid_alive "$old_pid"; then
+            echo "Bridge is already running (PID $old_pid)."
+            echo "Use 'hermes-pet stop-bridge' first."
+            exit 1
+        fi
+        rm -f "$PIDFILE_BRIDGE"
+    fi
+
+    local host url
+    host="$(_windows_host)"
+    url="$(_overlay_url)"
+
+    # Check overlay reachable first
+    if ! _overlay_running; then
+        echo "Warning: Overlay is not running. Bridge will start but cannot send events."
+        echo "  Start overlay first: hermes-pet start-overlay"
+    fi
+
+    echo "Starting bridge watcher..."
+    echo "  DB:      $STATE_DB"
+    echo "  Events:  $url"
+
+    # Start bridge in background, redirect output to log
+    nohup python3 -u "$BRIDGE_SCRIPT" \
+        --overlay-url "$url" \
+        --poll-interval 1.0 \
+        --heartbeat-interval 5.0 \
+        >> "$LOGFILE_BRIDGE" 2>&1 &
+
+    local bridge_pid=$!
+    echo "$bridge_pid" > "$PIDFILE_BRIDGE"
+
+    # Wait and verify
+    sleep 2
+    if _pid_alive "$bridge_pid"; then
+        echo "Bridge started: PID $bridge_pid"
+        echo "  Log:    $LOGFILE_BRIDGE"
+        echo "  State:  ${RUNTIME_DIR}/bridge_state.json"
+    else
+        echo "Error: Bridge failed to start." >&2
+        rm -f "$PIDFILE_BRIDGE"
+        exit 1
+    fi
+}
+
+cmd_stop_bridge() {
+    local pid
+    pid="$(_read_pid "$PIDFILE_BRIDGE")"
+    if [ -z "$pid" ]; then
+        echo "No bridge PID file found. Checking for running bridge processes..."
+        local orphans
+        orphans=$(pgrep -f "bridge_watcher.py" 2>/dev/null | grep -v "$$" || true)
+        if [ -z "$orphans" ]; then
+            echo "Bridge is not running."
+            return 0
+        fi
+        # Kill all orphan bridge processes
+        for opid in $orphans; do
+            echo "Found orphan bridge (PID $opid)."
+            kill "$opid" 2>/dev/null || true
+        done
+        sleep 1
+        echo "Bridge stopped."
+        return 0
+    fi
+
+    echo "Stopping bridge (PID $pid)..."
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+
+    if _pid_alive "$pid"; then
+        kill -9 "$pid" 2>/dev/null || true
+        sleep 1
+    fi
+
+    rm -f "$PIDFILE_BRIDGE"
+    echo "Bridge stopped."
+}
+
+cmd_restart() {
+    echo "=== Restarting Hermes Pet ==="
+    cmd_stop_bridge
+    cmd_stop_overlay
+    sleep 1
+    cmd_start_overlay
+    sleep 2
+    cmd_start_bridge
+    echo "=== Restart complete ==="
+}
+
+cmd_start_all() {
+    echo "=== Hermes Pet: Start All ==="
+    cmd_start_overlay
+    sleep 2
+    # HermesPet.exe now manages its own bridge by default.
+    # Only start bridge manually if overlay was started with --no-bridge.
+    # Use 'start-bridge' for explicit manual bridge start.
+    echo "Overlay started. Bridge is managed by overlay (auto-starts)."
+    echo "  Use 'start-bridge' if bridge was not started automatically."
+    echo "=== All started ==="
+}
+
+cmd_stop_all() {
+    echo "=== Hermes Pet: Stop All ==="
+    cmd_stop_bridge
+    cmd_stop_overlay
+    echo "=== All stopped ==="
+}
+
+cmd_restart_all() {
+    cmd_restart
+}
+
+cmd_status_all() {
+    cmd_status
+}
+
+cmd_test_event() {
+    local state="${1:-thinking}"
+    local host url
+    host="$(_windows_host)"
+    url="$(_overlay_url)"
+
+    if ! _overlay_running; then
+        echo "Error: Overlay is not running." >&2
+        echo "  Start it first: hermes-pet start-overlay" >&2
+        exit 1
+    fi
+
+    echo "Sending state '${state}' to overlay at ${url}..."
+    python3 -c "
+import socket, json, time
+CRLF = '\x0d\x0a'
+host = '${host}'
+port = ${OVERLAY_PORT}
+state = '${state}'
+event = {'event_type': 'state_change', 'state': state, 'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+body = json.dumps(event).encode()
+req = f'POST /event/ HTTP/1.1{CRLF}Host: {host}:{port}{CRLF}Content-Type: application/json{CRLF}Content-Length: {len(body)}{CRLF}Connection: close{CRLF}{CRLF}'.encode() + body
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(5)
+s.connect((host, port))
+s.sendall(req)
+resp = b''.join(iter(lambda: s.recv(4096), b''))
+s.close()
+if b'200 OK' in resp:
+    print(f'  OK {state} accepted')
+else:
+    print(f'  FAIL: {resp.decode(errors=\"replace\")[:100]}')
+" 2>&1
+}
+
+cmd_doctor() {
+    echo "=== Hermes Pet Doctor ==="
+    echo ""
+
+    # 1. Python
+    echo "1. Python..."
+    if command -v python3 &>/dev/null; then
+        echo "   python3 $(python3 --version 2>&1)"
+    else
+        echo "   ✗ python3 not found"
+    fi
+
+    # 2. dotnet
+    echo "2. .NET SDK..."
+    local dotnet_ver
+    dotnet_ver=$(powershell.exe -NoProfile -Command "dotnet --version" 2>/dev/null || true)
+    if [ -n "$dotnet_ver" ]; then
+        echo "   SDK $dotnet_ver (Windows)"
+    else
+        echo "   ✗ No .NET SDK on Windows"
+    fi
+
+    # 3. Hermes state.db
+    echo "3. Hermes state.db..."
+    local db="${HERMES_PET_STATE_DB:-$STATE_DB}"
+    if [ -f "$db" ]; then
+        local size
+        size=$(du -sh "$db" 2>/dev/null | cut -f1)
+        echo "   ✓ $db ($size)"
+        # Check live_state columns
+        local ls_cols
+        ls_cols=$(python3 -c "
+import sqlite3, sys
+try:
+    conn = sqlite3.connect('$db')
+    cur = conn.execute(\"PRAGMA table_info(sessions)\")
+    cols = {row[1] for row in cur.fetchall()}
+    conn.close()
+    if 'live_state' in cols and 'live_state_updated_at' in cols:
+        print('live_state: columns present')
+        # Count sessions with non-null live_state
+        conn2 = sqlite3.connect('$db')
+        cur2 = conn2.execute(\"SELECT COUNT(*) FROM sessions WHERE live_state IS NOT NULL\")
+        count = cur2.fetchone()[0]
+        conn2.close()
+        if count > 0:
+            print(f'live_state: {count} session(s) have live_state data')
+        else:
+            print('live_state: no live_state data yet (first turn will write it)')
+    else:
+        print('live_state: columns MISSING — DB needs schema update')
+except Exception as e:
+    print(f'live_state: error — {e}')
+" 2>/dev/null || echo "   live_state: error checking columns")
+        while IFS= read -r line; do
+            echo "   $line"
+        done <<< "$ls_cols"
+    else
+        echo "   ✗ state.db not found at $db"
+    fi
+
+    # 4. Overlay exe
+    echo "4. Overlay executable..."
+    local overlay_linux="${PROJECT_DIR}/src/wpf/HermesPet/bin/Release/net8.0-windows/win-x64/HermesPet.exe"
+    if [ -f "$overlay_linux" ]; then
+        echo "   ✓ $overlay_linux"
+    else
+        echo "   ✗ Not built. Run: dotnet build -c Release in src/wpf/HermesPet/"
+    fi
+
+    # 5. Windows host detection
+    echo "5. Windows host..."
+    local host
+    host="$(_windows_host)" || true
+    if [ -n "$host" ]; then
+        echo "   ✓ $host"
+    else
+        echo "   ✗ Could not detect Windows host IP from WSL"
+    fi
+
+    # 6. Port 5731
+    echo "6. Port ${OVERLAY_PORT}..."
+    if _overlay_running; then
+        local listen_state
+        listen_state=$(powershell.exe -NoProfile -Command \
+            "Get-NetTCPConnection -LocalPort ${OVERLAY_PORT} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty State" 2>/dev/null || true)
+        if [ "$listen_state" = "Listen" ]; then
+            echo "   ✓ Port ${OVERLAY_PORT} is listening"
+        else
+            echo "   ⚠ Port ${OVERLAY_PORT} state: $listen_state"
+        fi
+    else
+        echo "   ⚠ Overlay not running (port check skipped)"
+    fi
+
+    # 7. Tests
+    echo "7. Tests..."
+    cd "$PROJECT_DIR" && python3 -m pytest tests/ -q 2>&1 | tail -1 || echo "   (pytest not available in this context)"
+
+    # 8. Dependencies
+    echo "8. Python dependencies..."
+    python3 -c "import sqlite3; print('   ✓ sqlite3')" 2>/dev/null || echo "   ✗ sqlite3"
+    python3 -c "import json; print('   ✓ json')" 2>/dev/null || echo "   ✗ json"
+
+    echo ""
+    echo "Doctor complete."
+}
+
+cmd_logs() {
+    local tail_n="${1:-30}"
+    local source="${2:-bridge}"
+
+    case "$source" in
+        bridge)
+            if [ -f "$LOGFILE_BRIDGE" ]; then
+                echo "=== Bridge logs (last $tail_n lines) ==="
+                tail -n "$tail_n" "$LOGFILE_BRIDGE"
+            else
+                echo "No bridge log file at $LOGFILE_BRIDGE"
+            fi
+            ;;
+        overlay)
+            if [ -f "$LOGFILE_OVERLAY" ]; then
+                echo "=== Overlay logs (last $tail_n lines) ==="
+                tail -n "$tail_n" "$LOGFILE_OVERLAY"
+            else
+                echo "No overlay log file at $LOGFILE_OVERLAY"
+            fi
+            ;;
+        state)
+            local state_file="${PROJECT_DIR}/src/bridge_watcher_state.json"
+            if [ -f "$state_file" ]; then
+                echo "=== Bridge state ==="
+                python3 -m json.tool "$state_file"
+            else
+                echo "No bridge state file at $state_file"
+            fi
+            ;;
+        *)
+            echo "Unknown log source: $source (use: bridge, overlay, state)" >&2
+            exit 1
+            ;;
+    esac
+}
+
+cmd_help() {
+    cat <<'EOF'
+Hermes Pet — project-local control wrapper
+
+Usage:  bin/hermes-pet <command> [options]
+
+Commands:
+  status                 Show overlay + bridge status
+  start-overlay          Start Windows overlay (HermesPet.exe)
+  stop-overlay           Stop Windows overlay
+  start-bridge           Start WSL bridge watcher
+  stop-bridge            Stop WSL bridge watcher
+  start-all              Start overlay + bridge (convenience)
+  stop-all               Stop bridge + overlay (convenience)
+  restart-all            Stop all, then start all (same as restart)
+  restart                Stop all, then start all
+  test-event <state>     Send a fake state change to overlay
+                         (states: idle, listening, thinking, tool_running,
+                          waiting_for_jack, done, error)
+  doctor                 Run system diagnostics
+  logs [bridge|overlay|state] [N]
+                         Show logs (default: bridge, last 30 lines)
+  help                   This message
+
+Environment:
+  OVERLAY_PORT           Port for overlay HTTP server (default: 5731)
+
+Examples:
+  bin/hermes-pet status
+  bin/hermes-pet start-overlay
+  bin/hermes-pet test-event thinking
+  bin/hermes-pet logs bridge 50
+EOF
+}
+
+# ── Main ──────────────────────────────────────
+
+_ensure_not_root
+
+case "${1:-help}" in
+    status)
+        cmd_status
+        ;;
+    start-overlay)
+        cmd_start_overlay
+        ;;
+    stop-overlay)
+        cmd_stop_overlay
+        ;;
+    start-bridge)
+        cmd_start_bridge
+        ;;
+    stop-bridge)
+        cmd_stop_bridge
+        ;;
+    restart)
+        cmd_restart
+        ;;
+    start-all)
+        cmd_start_all
+        ;;
+    stop-all)
+        cmd_stop_all
+        ;;
+    restart-all)
+        cmd_restart_all
+        ;;
+    status-all)
+        cmd_status_all
+        ;;
+    test-event)
+        cmd_test_event "${2:-thinking}"
+        ;;
+    doctor)
+        cmd_doctor
+        ;;
+    logs)
+        cmd_logs "${3:-30}" "${2:-bridge}"
+        ;;
+    help|--help|-h)
+        cmd_help
+        ;;
+    *)
+        echo "Unknown command: $1" >&2
+        echo "Usage: bin/hermes-pet <command>" >&2
+        echo "Try:   bin/hermes-pet help" >&2
+        exit 1
+        ;;
+esac

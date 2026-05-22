@@ -1,0 +1,15 @@
+{
+    "comment": "Hermes Pet — example configuration file. Copy to config.json and customize.",
+    "hermes_profile": "phantom",
+    "port": 5731,
+    "poll_interval_seconds": 1.0,
+    "heartbeat_interval_seconds": 5.0,
+    "live_state_freshness_seconds": 30,
+    "idle_threshold_seconds": 10,
+    "manage_bridge": true,
+    "paths": {
+        "wsl_project_root": null,
+        "state_db_path": null,
+        "log_dir_windows": null
+    }
+}

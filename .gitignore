@@ -1,0 +1,59 @@
+# ── Runtime & logs ───────────────────────────────────────
+runtime/
+logs/
+src/bridge_watcher_state.json
+*.state.json
+
+# ── Hermes / user data ──────────────────────────────────
+state.db
+*.db
+*.db-wal
+*.db-shm
+.env
+.venv/
+__pycache__/
+*.pyc
+
+# ── Build outputs ────────────────────────────────────────
+src/wpf/HermesPet/bin/
+src/wpf/HermesPet/obj/
+out/
+build/
+
+# ── OS / editor artifacts ───────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vs/
+.idea/
+*.user
+*.suo
+
+# ── Backups ──────────────────────────────────────────────
+*.bak
+*.bak.*
+
+# ── Reports (local-only, too project-specific) ──────────
+reports/*.md
+
+# ── Handoff and planning files (private workspace docs) ─
+HERMES_PET_COMPLETE_HANDOFF.md
+SPRITE_HANDOFF_FOR_CODEX.md
+docs/superpowers/
+skills/
+
+# Keep the workflow skill for now
+!skills/hermes-pet-windows-workflow/SKILL.md
+
+# Keep these general architecture docs
+!docs/HERMES_PET_WINDOWS_ARCHITECTURE.md
+!docs/event_protocol_draft.md
+!docs/architecture.md
+!docs/public-demo.md
+!docs/troubleshooting.md
+
+# Keep the LICENSE and attribution
+!LICENSE
+!ATTRIBUTIONS.md

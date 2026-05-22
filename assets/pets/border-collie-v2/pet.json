@@ -1,0 +1,22 @@
+{
+  "name": "border-collie-v2",
+  "display_name": "Border Collie V2",
+  "version": 2,
+  "attribution": "Community-shared Codex Pet (updated GIF states)",
+  "cell_width": 192,
+  "cell_height": 208,
+  "atlas_cols": 8,
+  "atlas_rows": 8,
+  "frame_rate": 8,
+  "states": {
+    "idle":             { "frames": [8, 9, 10, 11, 12, 13],           "frame_ms": 280, "loop": true },
+    "listening":        { "frames": [47, 48, 49, 50, 51, 52],         "frame_ms": 250, "loop": true },
+    "thinking":         { "frames": [19, 20, 21, 22, 23, 24],         "frame_ms": 400, "loop": true },
+    "tool_running":     { "frames": [41, 42, 43, 44, 45, 46],         "frame_ms": 250, "loop": true },
+    "waiting_for_jack": { "frames": [53, 54, 55, 56],                 "frame_ms": 400, "loop": true },
+    "done":             { "frames": [14, 15, 16, 17, 18],             "frame_ms": 250, "loop": false },
+    "error":            { "frames": [0, 1, 2, 3, 4, 5, 6, 7],        "frame_ms": 200, "loop": false },
+    "unknown":          { "frames": [25, 33, 26, 34, 27, 35, 28, 36], "frame_ms": 250, "loop": true }
+  },
+  "description": "Border Collie with per-state GIF animations: idle, waiting (listening), review (thinking), running (tool), waving (waiting), jumping (done), failed (error), paced left-right (unknown)."
+}
