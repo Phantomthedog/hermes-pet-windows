@@ -4,6 +4,8 @@ A floating desktop companion that brings your [Hermes Agent](https://github.com/
 
 Hermes Pet runs as a transparent always-on-top overlay that shows the agent's current state — listening, thinking, running tools, idle — through animated sprites or a debug status panel.
 
+> **Personal note.** This project is also personal for me. The Border Collie pet is in memory of my dog, who passed away. He used to stay near me while I worked, and this little desktop companion is a small way to keep that feeling with me. When Hermes is thinking, running tools, or sitting idle, the dog is there too — not just as a mascot, but as a small reminder of him.
+
 ## How It Works
 
 ```
