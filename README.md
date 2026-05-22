@@ -30,15 +30,30 @@ Hermes Pet has **two detection modes**:
 
 **Primary — Live-state (fast):** Hermes core writes `live_state` to the sessions table at each lifecycle stage — `listening` when your message arrives, `thinking` before the model API call, `tool_running` before a tool executes (with the tool name), and `done` or `error` when the turn finishes. The bridge reads this every second.
 
-**Fallback — Transcript inference:** If live-state columns don't exist yet (older Hermes version) or the data is stale, the bridge falls back to inferring state from recent message timestamps and roles.
+**Fallback — Transcript inference:** If live-state columns don't exist (Hermes Agent without [PR #30247](https://github.com/NousResearch/hermes-agent/pull/30247)) or the data is stale, the bridge falls back to inferring state from recent message timestamps and roles.
 
 ## Requirements
+
+> **Important:** Hermes Pet works best with Hermes Agent live-state support.
+> Live-state support is proposed upstream in [PR #30247](https://github.com/NousResearch/hermes-agent/pull/30247).
+> Until that PR is merged and released, see the two modes below.
 
 - **Windows 10/11** (for the WPF overlay)
 - **WSL2** with Ubuntu (for the Python bridge watcher)
 - **Hermes Agent** running in WSL (any profile — default is `phantom`)
 - **.NET 8 SDK** on Windows (to build the overlay)
 - **Python 3** in WSL (for the bridge watcher — normally already present)
+
+### Hermes live-state modes
+
+**Fallback mode (no Hermes core patch required)**
+The pet infers broad states from transcript rows. `tool_running` and `listening` may be delayed or unreliable.
+
+**Live-state mode (recommended — requires PR #30247)**
+Apply the live-state patch from [PR #30247](https://github.com/NousResearch/hermes-agent/pull/30247) to your Hermes Agent checkout. Enables real-time states:
+`listening → thinking → tool_running → done`
+
+Run `bash bin/hermes-pet doctor` to check whether your Hermes state.db has live-state columns.
 
 ## Quick Start
 
@@ -129,7 +144,9 @@ bin/
 
 ## Live-State Contract (Hermes Core)
 
-Starting in Hermes Agent vX.Y, the `sessions` table includes four optional columns for live execution state:
+> **Requires Hermes Agent live-state support.** At the time of writing this is proposed upstream in [PR #30247](https://github.com/NousResearch/hermes-agent/pull/30247). Apply the patch to enable live-state columns.
+
+The `sessions` table includes four optional columns for live execution state:
 
 | Column | Type | Description |
 |---|---|---|

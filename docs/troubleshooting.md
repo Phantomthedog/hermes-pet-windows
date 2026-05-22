@@ -81,14 +81,20 @@ Get-Process -Name HermesPet -ErrorAction SilentlyContinue | Stop-Process -Force
 ```bash
 bash bin/hermes-pet doctor
 ```
-This checks Python, .NET SDK, state.db presence, live-state columns, overlay executable, Windows host detection, and port availability.
+1. **Live-state columns missing.** If your Hermes Agent doesn't have [PR #30247](https://github.com/NousResearch/hermes-agent/pull/30247) applied, no `live_state` columns exist in the database. The bridge falls back to transcript inference, which cannot reliably show `tool_running` or `listening`. If the DB path is correct but inference thresholds aren't being met, the pet will stay idle.
 
-**Check live-state columns manually:**
-```bash
-sqlite3 ~/.hermes/profiles/phantom/state.db \
-  "PRAGMA table_info(sessions);" | grep live_state
-```
-If no `live_state` columns exist, the bridge will use transcript inference exclusively. See [issue #12](#12-state-looks-stuck-thinking-for-too-long) for timeout tuning.
+   **Check with doctor:**
+   ```bash
+   bash bin/hermes-pet doctor
+   ```
+   Look for "live_state: columns MISSING" or "live_state: columns present". If missing, the pet will work in fallback mode only.
+   
+   **Check manually:**
+   ```bash
+   sqlite3 ~/.hermes/profiles/phantom/state.db \
+     "PRAGMA table_info(sessions);" | grep live_state
+   ```
+   If no `live_state` columns exist, the bridge will use transcript inference exclusively. See [issue #12](#12-state-looks-stuck-thinking-for-too-long) for timeout tuning.
 
 **Reset the bridge cursor:**
 ```bash

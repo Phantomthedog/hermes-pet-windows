@@ -118,7 +118,7 @@ state.db ──[poll]──▶ bridge_watcher.py ──[HTTP POST]──▶ Even
                                                                                     (state → display)
 ```
 
-1. **Hermes Agent** writes session data to `~/.hermes/profiles/phantom/state.db`. In newer versions, it also writes `live_state` columns on the `sessions` table during each lifecycle phase.
+1. **Hermes Agent** writes session data to `~/.hermes/profiles/phantom/state.db`. With [live-state support (PR #30247)](https://github.com/NousResearch/hermes-agent/pull/30247), it also writes `live_state` columns on the `sessions` table during each lifecycle phase.
 
 2. **bridge_watcher.py** opens the SQLite DB every 1 second and calls into `state_mapper.py`:
    - First tries `get_live_states()` — reads fresh `live_state` from the sessions table.
@@ -179,7 +179,7 @@ Hermes Agent can optionally write four columns to the `sessions` table:
 | `current_tool_name` | TEXT | Tool name during `tool_running` (nullable) |
 | `live_state_detail` | TEXT | Optional detail like error message (nullable) |
 
-These columns are **nullable** and **backward-compatible**. If they don't exist (older Hermes version), the bridge silently falls back to transcript inference.
+These columns are **nullable** and **backward-compatible**. If they don't exist (Hermes Agent without [PR #30247](https://github.com/NousResearch/hermes-agent/pull/30247)), the bridge silently falls back to transcript inference.
 
 ### 4.2 Lifecycle (as written by Hermes Agent)
 
