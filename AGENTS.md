@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+**GitHub:** https://github.com/Phantomthedog/hermes-pet-windows
+
 ## Project Structure & Module Organization
 
 Hermes Pet is split between a WSL Python bridge and a Windows WPF overlay. Python source lives in `src/`: `event_schema.py` validates events, `state_mapper.py` infers Hermes state from SQLite, `bridge_watcher.py` polls `~/.hermes/profiles/phantom/state.db`, and `test_events.py` sends fake overlay events. Pytest coverage lives in `tests/`. The WPF app is under `src/wpf/HermesPet/`; treat its `bin/` and `obj/` subfolders as generated output. Root `bin/` contains launchers, `assets/pets/` contains sprite packs, and `docs/` plus `reports/` hold architecture notes.
