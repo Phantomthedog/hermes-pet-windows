@@ -32,6 +32,8 @@ public class EventReceiver
     private volatile bool _running;
     private Thread? _acceptThread;
     private long _lastEventTicks;
+    private string? _lastState;
+    private Dictionary<string, object>? _lastPayload;
 
     /// <summary>UTC ticks of the last received event. 0 if none.</summary>
     public long LastEventTicks => _lastEventTicks;
@@ -41,10 +43,19 @@ public class EventReceiver
         ? new DateTime(_lastEventTicks, DateTimeKind.Utc)
         : DateTime.MinValue;
 
+    /// <summary>Last state received from bridge.</summary>
+    public string? LastState => _lastState;
+
+    /// <summary>Last payload received from bridge.</summary>
+    public Dictionary<string, object>? LastPayload => _lastPayload;
+
     /// <summary>
     /// Fired when a valid pet event is received. Raised from the listener thread.
     /// </summary>
     public event EventHandler<PetEventEventArgs>? OnEvent;
+
+    /// <summary>Optional status provider — allows MainWindow to inject pet engine + bridge state into GET /status.</summary>
+    public Func<Dictionary<string, object>?>? StatusProvider { get; set; }
 
     public EventReceiver(int port)
     {
@@ -159,6 +170,28 @@ public class EventReceiver
                     ? request.Substring(bodyStart + 4).Trim()
                     : "";
 
+                // GET /status — return current overlay state (feedback loop)
+                if (requestLine.StartsWith("GET /status") || requestLine.StartsWith("GET /"))
+                {
+                    var extra = StatusProvider?.Invoke();
+                    var resp = new Dictionary<string, object?>
+                    {
+                        ["status"] = "ok",
+                        ["running"] = _running,
+                        ["last_event_time"] = LastEventTime == DateTime.MinValue
+                            ? null : LastEventTime.ToString("o"),
+                        ["last_state"] = _lastState,
+                        ["has_payload"] = _lastPayload != null,
+                    };
+                    if (extra != null)
+                    {
+                        foreach (var kv in extra)
+                            resp[kv.Key] = kv.Value;
+                    }
+                    SendTcpResponse(stream, 200, resp);
+                    return;
+                }
+
                 // Only accept POST to /event/
                 if (!requestLine.StartsWith("POST /event/") &&
                     !requestLine.StartsWith("POST /event ") &&
@@ -215,6 +248,8 @@ public class EventReceiver
                 };
                 OnEvent?.Invoke(this, args);
                 _lastEventTicks = DateTime.UtcNow.Ticks;
+                _lastState = petState;
+                _lastPayload = payload;
 
                 SendTcpResponse(stream, 200, new { status = "ok" });
             }

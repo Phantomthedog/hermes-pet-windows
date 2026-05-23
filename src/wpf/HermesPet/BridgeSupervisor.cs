@@ -49,7 +49,7 @@ public class BridgeSupervisor : IDisposable
     /// <param name="projectDirWsl">WSL path to the project root (e.g. /mnt/c/Users/.../hermes-pet).
     /// Auto-detected if null.</param>
     /// <param name="stateDbPath">Path to Hermes state.db in WSL.
-    /// Defaults to ~/.hermes/profiles/phantom/state.db if null.</param>
+    /// Defaults to $HOME/.hermes/profiles/phantom/state.db if null.</param>
     /// <param name="logDirWindows">Windows path for logs. Defaults to a logs/ subfolder
     /// next to the executable if null.</param>
     public BridgeSupervisor(
@@ -88,7 +88,7 @@ public class BridgeSupervisor : IDisposable
             }
         }
 
-        _stateDbPath = stateDbPath ?? "~/.hermes/profiles/phantom/state.db";
+        _stateDbPath = stateDbPath ?? "$(getent passwd $(whoami) | cut -d: -f6)/.hermes/profiles/phantom/state.db";
         _logDirWindows = logDirWindows ?? Path.Combine(
             Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) ?? ".",
             "..", "..", "..", "..", "..", "logs");
@@ -119,12 +119,14 @@ public class BridgeSupervisor : IDisposable
 
         try
         {
-            // Build WSL command that dynamically detects the Windows host
+            // Build WSL command that dynamically detects the Windows host.
+            // Note: wsl.exe bash -lc has issues with $VAR across && chains
+            // (variable not available on the RHS of &&). Use inline command
+            // substitution instead of an intermediate variable.
             string wslCommand =
                 $"cd {_projectDirWsl} && " +
-                "WINDOWS_HOST=$(ip route show default | awk '{print $3}') && " +
-                $"OVERLAY_URL=http://${{WINDOWS_HOST}}:{_port}/event/ && " +
-                $"python3 src/bridge_watcher.py --db-path {_stateDbPath} --overlay-url \"$OVERLAY_URL\"";
+                $"python3 src/bridge_watcher.py --db-path {_stateDbPath} " +
+                $"--overlay-url http://$(ip route show default | awk '{{print $3}}'):{_port}/event/ --poll-interval 1.0";
 
             var psi = new ProcessStartInfo
             {

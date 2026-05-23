@@ -69,18 +69,28 @@ public partial class MainWindow : Window
         _petMode = true;
 
         UpdateModeVisibility();
-        UpdateDisplay("idle", null);
-        DrawBuiltinPet("idle");
 
-        // Setup animation timer (runs while in PET mode)
+        // Setup animation timer BEFORE UpdateDisplay so StartAnimation() works
         _animTimer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(300)
         };
         _animTimer.Tick += OnAnimTick;
 
+        UpdateDisplay("idle", null);
+        DrawBuiltinPet("idle");
+
         // Start HTTP event receiver on background thread
         _receiver = new EventReceiver(port);
+        _receiver.StatusProvider = () => new Dictionary<string, object>
+        {
+            ["pet_state"] = _engine.CurrentState ?? "unknown",
+            ["pet_mode"] = _petMode ? "PET" : "DEBUG",
+            ["has_sprites"] = _engine.AssetManager.HasSprites,
+            ["frame_count"] = _currentFrames.Length,
+            ["event_count"] = _eventCount,
+            ["anim_running"] = _animTimer?.IsEnabled ?? false,
+        };
         _receiver.OnEvent += OnPetEvent;
         _receiverThread = new Thread(() => _receiver.Start())
         {

@@ -20,21 +20,29 @@ from event_schema import build_event
 
 
 def send_event(url: str, event: dict) -> dict:
-    """Send an event and return the response."""
+    """Send an event and return the response.
+
+    Uses http.client directly to avoid IncompleteRead issues with
+    Connection: close responses (same fix as bridge_watcher.py).
+    """
+    import http.client
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 5731
+    path = parsed.path or "/event/"
+
     data = json.dumps(event).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read().decode("utf-8"))
-    except urllib.error.URLError as e:
-        return {"status": "error", "message": f"Connection failed: {e.reason}"}
+        conn = http.client.HTTPConnection(host, port, timeout=3)
+        conn.request("POST", path, data, {"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        body = resp.read().decode("utf-8")
+        conn.close()
+        return json.loads(body)
+    except Exception as e:
+        return {"status": "error", "message": f"Connection failed: {e}"}
 
 
 def send_sequence(url: str, delay: float = 2.0) -> None:

@@ -14,7 +14,10 @@ OVERLAY_DIR="${PROJECT_DIR}/src/wpf/HermesPet"
 BRIDGE_SCRIPT="${PROJECT_DIR}/src/bridge_watcher.py"
 FAKE_SENDER="${PROJECT_DIR}/src/test_events.py"
 STATE_DB="${HOME}/.hermes/profiles/phantom/state.db"
-POST_URL="http://127.0.0.1:5731/event/"
+# WSL2: 127.0.0.1 is the WSL VM's loopback, not the Windows host's.
+# The overlay runs on Windows; reach it via the default gateway (Windows host IP).
+_WINDOWS_HOST_IP="$(ip route | awk '/default/ {print $3; exit}')"
+POST_URL="http://${_WINDOWS_HOST_IP}:5731/event/"
 
 case "${1:-help}" in
   build)

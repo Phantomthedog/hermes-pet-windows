@@ -145,7 +145,7 @@ public class PetAssetManager
                 var bitmap = new BitmapImage();
                 bitmap.BeginInit();
                 bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.UriSource = new Uri("file:///" + spritesheetPath);
+                bitmap.UriSource = new Uri(spritesheetPath, UriKind.Absolute);
                 bitmap.EndInit();
                 bitmap.Freeze(); // Make it cross-thread accessible
 
